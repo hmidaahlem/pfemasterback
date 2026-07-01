@@ -60,7 +60,9 @@ public function store(Request $request): JsonResponse
                 $count = PointDeVente::where('responsable_fb_id', $responsableId)->count();
 
                 if ($count >= 2) {
-                    abort(422, 'This responsible FB is already assigned to maximum 2 points de vente.');
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'responsable_fb_id' => ['Ce responsable est déjà assigné à 2 points de vente (maximum autorisé).']
+                    ]);
                 }
             }
 
@@ -89,6 +91,8 @@ public function store(Request $request): JsonResponse
             'data' => $pdv->load(['airport', 'responsableFb'])
         ], 201);
 
+    } catch (\Illuminate\Validation\ValidationException $e) {
+        throw $e; // Let Laravel handle validation error formatting
     } catch (\Throwable $e) {
 
         Log::error('STORE ERROR', [
@@ -126,17 +130,25 @@ public function update(Request $request, $id)
 
     $newResponsable = $request->input('responsable_fb_id');
     $oldResponsable = $pointDeVente->responsable_fb_id;
+    $isNowActive = $request->has('is_active') ? $request->is_active : $pointDeVente->is_active;
 
-    if ($request->has('responsable_fb_id') && $newResponsable != $oldResponsable) {
+    if ($newResponsable) {
+        if (!$isNowActive) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'responsable_fb_id' => ['Un point de vente inactif ne peut pas avoir un Responsable FB.']
+            ]);
+        }
 
-        $count = PointDeVente::where('responsable_fb_id', $newResponsable)
-            ->where('id', '!=', $pointDeVente->id)
-            ->count();
+        if ($newResponsable != $oldResponsable) {
+            $count = PointDeVente::where('responsable_fb_id', $newResponsable)
+                ->where('id', '!=', $pointDeVente->id)
+                ->count();
 
-        if ($count >= 2) {
-            return response()->json([
-                'message' => 'This responsable is already assigned to maximum 2 points de vente.'
-            ], 422);
+            if ($count >= 2) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'responsable_fb_id' => ['Ce responsable est déjà assigné à 2 points de vente (maximum autorisé).']
+                ]);
+            }
         }
     }
 

@@ -13,13 +13,17 @@ return new class extends Migration
      */
     public function up(): void
     {
-        DB::statement("ALTER TABLE products MODIFY COLUMN type ENUM('commercial', 'matiere_premiere', 'food', 'plat') NOT NULL");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE products MODIFY COLUMN type ENUM('commercial', 'matiere_premiere', 'food', 'plat') NOT NULL");
+        }
     }
 
     public function down(): void
     {
         // Remove any plat products before reverting the enum
         DB::table('products')->where('type', 'plat')->delete();
-        DB::statement("ALTER TABLE products MODIFY COLUMN type ENUM('commercial', 'matiere_premiere', 'food') NOT NULL");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE products MODIFY COLUMN type ENUM('commercial', 'matiere_premiere', 'food') NOT NULL");
+        }
     }
 };

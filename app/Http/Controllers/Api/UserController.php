@@ -62,6 +62,16 @@ class UserController extends Controller
             return response()->json($validator->errors(), 422);
         }
 
+        if ($request->has('pdv_id') && $request->pdv_id) {
+            $pdv = \App\Models\PointDeVente::find($request->pdv_id);
+            if ($pdv && !$pdv->is_active) {
+                return response()->json([
+                    'message' => 'Impossible d\'assigner un point de vente inactif.',
+                    'errors' => ['pdv_id' => ['Le point de vente est inactif.']]
+                ], 422);
+            }
+        }
+
         // Validate status: cannot set back to en_attente if already active/inactive
         if ($request->has('status') && $request->status === 'en_attente') {
             return response()->json([
@@ -93,6 +103,16 @@ class UserController extends Controller
         ]);
 
         $role = Role::findOrFail($request->role_id);
+
+        if ($request->has('pdv_id') && $request->pdv_id) {
+            $pdv = \App\Models\PointDeVente::find($request->pdv_id);
+            if ($pdv && !$pdv->is_active) {
+                return response()->json([
+                    'message' => 'Impossible d\'assigner un point de vente inactif.',
+                    'errors' => ['pdv_id' => ['Le point de vente est inactif.']]
+                ], 422);
+            }
+        }
 
         if ($role->name === 'SUPER_ADMIN') {
             return response()->json([
@@ -158,6 +178,16 @@ class UserController extends Controller
             return response()->json([
                 'message' => 'Impossible de remettre un caissier en attente une fois activé ou désactivé.',
             ], 422);
+        }
+
+        if ($request->has('pdv_id') && $request->pdv_id) {
+            $pdv = \App\Models\PointDeVente::find($request->pdv_id);
+            if ($pdv && !$pdv->is_active) {
+                return response()->json([
+                    'message' => 'Impossible d\'assigner un point de vente inactif.',
+                    'errors' => ['pdv_id' => ['Le point de vente est inactif.']]
+                ], 422);
+            }
         }
 
         // Role is NOT modifiable after creation
@@ -276,9 +306,18 @@ class UserController extends Controller
 
     public function assignPointDeVente(Request $request, User $user): JsonResponse
     {
+        if ($request->has('point_de_vente_id') && $request->point_de_vente_id) {
+            $pdv = \App\Models\PointDeVente::find($request->point_de_vente_id);
+            if ($pdv && !$pdv->is_active) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'point_de_vente_id' => ['Impossible d\'assigner un point de vente inactif.']
+                ]);
+            }
+        }
+
         $user->update([
-            'point_de_vente_id' => $request->point_de_vente_id,
-            'caissier_status' => $request->status ?? 'active',
+            'pdv_id' => $request->point_de_vente_id,
+            'status' => $request->status ?? 'active',
         ]);
 
         return response()->json($user->load('pointDeVente'));

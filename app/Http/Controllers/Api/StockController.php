@@ -31,9 +31,12 @@ class StockController extends Controller
             $query->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
         }
 
-        // Chef Cuisine: only see stocks of MATIERE_PREMIERE products (ingredients) in read-only mode
         if ($role === 'CHEF_CUISINE') {
             $query->whereHas('product', fn ($q) => $q->where('type', 'matiere_premiere'));
+        }
+
+        if ($role === 'RESPONSABLE_FB') {
+            $query->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
         }
 
         if ($request->boolean('low_stock')) {
@@ -59,6 +62,11 @@ class StockController extends Controller
             $dailyOutputsQuery->whereHas('stock.product', fn ($q) => $q->where('type', 'matiere_premiere'));
             $totalStockQuery->whereHas('product', fn ($q) => $q->where('type', 'matiere_premiere'));
             $criticalCountQuery->whereHas('product', fn ($q) => $q->where('type', 'matiere_premiere'));
+        } elseif ($role === 'RESPONSABLE_FB') {
+            $dailyInputsQuery->whereHas('stock.product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
+            $dailyOutputsQuery->whereHas('stock.product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
+            $totalStockQuery->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
+            $criticalCountQuery->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
         }
 
         $dailyInputs = $dailyInputsQuery->sum('quantity');
@@ -194,6 +202,8 @@ class StockController extends Controller
             $query->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
         } elseif ($role === 'CHEF_CUISINE') {
             $query->whereHas('product', fn ($q) => $q->where('type', 'matiere_premiere'));
+        } elseif ($role === 'RESPONSABLE_FB') {
+            $query->whereHas('product', fn ($q) => $q->whereIn('type', ['commercial', 'food']));
         }
 
         $lowStocks = $query->get();
@@ -203,14 +213,24 @@ class StockController extends Controller
 
     public function expiredProducts(): JsonResponse
     {
-        $expired = StockMovement::where('type', 'in')
+        $user = auth()->user();
+        $role = $user->role?->name;
+
+        $query = StockMovement::where('type', 'in')
             ->whereNotNull('expiration_date')
             ->where('expiration_date', '<', now())
             ->where('quantity', '>', 0)
-            ->with('stock.product')
-            ->get();
+            ->with('stock.product');
 
-        return response()->json($expired);
+        if ($role === 'CHEF_MAGASIN') {
+            $query->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
+        } elseif ($role === 'CHEF_CUISINE') {
+            $query->whereHas('stock.product', fn($q) => $q->where('type', 'matiere_premiere'));
+        } elseif ($role === 'RESPONSABLE_FB') {
+            $query->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
+        }
+
+        return response()->json($query->get());
     }
 
     private function checkExpirationAlerts(Stock $stock): void

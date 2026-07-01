@@ -64,15 +64,23 @@ class InternalOrderController extends Controller
     public function getProductsByCategories(Request $request): JsonResponse
     {
         $request->validate([
-            'category_ids' => 'required|array|min:1',
+            'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
+            'type' => 'nullable|string',
         ]);
 
-        $products = Product::whereIn('category_id', $request->category_ids)
-            ->where('is_active', true)
-            ->where('approval_status', 'approved')
-            ->select('id', 'name', 'price', 'category_id', 'type', 'image')
-            ->get();
+        $query = Product::where('is_active', true)
+            ->where('approval_status', 'approved');
+
+        if ($request->has('category_ids') && count($request->category_ids) > 0) {
+            $query->whereIn('category_id', $request->category_ids);
+        }
+
+        if ($request->has('type')) {
+            $query->where('type', $request->type);
+        }
+
+        $products = $query->select('id', 'name', 'price', 'category_id', 'type', 'image')->get();
 
         return response()->json([
             'data' => $products,
@@ -175,6 +183,16 @@ class InternalOrderController extends Controller
         $request->validate([
             'status' => 'required|in:EN_ATTENTE,DISPONIBLE,PARTIELLEMENT_DISPONIBLE,NON_DISPONIBLE',
         ]);
+
+        if (in_array($request->status, ['DISPONIBLE', 'PARTIELLEMENT_DISPONIBLE'])) {
+            $totalFulfilled = $internalOrder->items()->sum('quantity_fulfilled');
+            if ($totalFulfilled <= 0) {
+                return response()->json([
+                    'message' => 'Impossible de passer la commande en statut ' . $request->status . ' car aucune quantité n\'a été livrée. Veuillez renseigner les quantités d\'abord.',
+                    'errors' => ['status' => ['Aucune quantité livrée n\'a été renseignée.']]
+                ], 422);
+            }
+        }
 
         $oldStatus = $internalOrder->status;
         $internalOrder->update(['status' => $request->status]);

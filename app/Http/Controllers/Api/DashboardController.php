@@ -26,9 +26,16 @@ class DashboardController extends Controller
         $dateFrom = $request->input('date_from', now()->startOfMonth()->toDateString());
         $dateTo = $request->input('date_to', now()->toDateString());
 
-        $lowStockCount = Stock::whereColumn('quantity', '<=', 'min_threshold')->count();
+        $lowStockQuery = Stock::whereColumn('quantity', '<=', 'min_threshold');
+        $expiredQuery = Product::where('expiration_date', '<', now())->where('is_active', true);
 
-        $expiredCount = Product::where('expiration_date', '<', now())->where('is_active', true)->count();
+        if ($role === 'RESPONSABLE_FB') {
+            $lowStockQuery->whereHas('product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
+            $expiredQuery->whereIn('type', ['commercial', 'food']);
+        }
+
+        $lowStockCount = $lowStockQuery->count();
+        $expiredCount = $expiredQuery->count();
 
         $activeUsers = User::where('status', 'active')->count();
 

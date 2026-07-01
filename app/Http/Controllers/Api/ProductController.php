@@ -82,6 +82,9 @@ class ProductController extends Controller
                 'category_id' => 'required|exists:categories,id',
                 'image' => 'nullable|image|max:2048',
                 'unit' => 'sometimes|string|in:piece,kg,g,liter,ml',
+                'min_threshold' => 'sometimes|numeric|min:0',
+                'is_active' => 'sometimes|boolean',
+                'usage_status' => 'sometimes|in:IN_USE,NOT_IN_USE,OUT_OF_STOCK',
             ]);
         } elseif ($role === 'CHEF_CUISINE') {
             $request->validate([
@@ -96,6 +99,9 @@ class ProductController extends Controller
                 'ingredients.*.quantity' => 'required|numeric|min:0.01',
                 'ingredients.*.unit' => 'sometimes|string',
                 'unit' => 'sometimes|string|in:piece,kg,g,liter,ml',
+                'min_threshold' => 'sometimes|numeric|min:0',
+                'is_active' => 'sometimes|boolean',
+                'usage_status' => 'sometimes|in:IN_USE,NOT_IN_USE,OUT_OF_STOCK',
             ]);
         } else {
             $request->validate([
@@ -108,6 +114,9 @@ class ProductController extends Controller
                 'allergens' => 'nullable|array',
                 'expiration_date' => 'nullable|date',
                 'unit' => 'sometimes|string|in:piece,kg,g,liter,ml',
+                'min_threshold' => 'sometimes|numeric|min:0',
+                'is_active' => 'sometimes|boolean',
+                'usage_status' => 'sometimes|in:IN_USE,NOT_IN_USE,OUT_OF_STOCK',
             ]);
         }
 
@@ -130,8 +139,21 @@ class ProductController extends Controller
         // CHEF_CUISINE manages their own recipes: auto-approve without RESPONSABLE_ACHAT validation
         $data['approval_status'] = ($role === 'CHEF_CUISINE') ? 'approved' : 'pending';
 
-        if ($request->has('quantity_per_batch')) {
-            $data['quantity_per_batch'] = $request->quantity_per_batch;
+        if ($request->type === 'plat') {
+            $data['quantity_per_batch'] = null;
+            // No usage_status needed for plat
+        } else {
+            if ($request->has('usage_status')) {
+                $data['usage_status'] = $request->usage_status;
+                $data['is_active'] = $request->usage_status === 'IN_USE';
+            } elseif ($request->has('is_active')) {
+                $data['is_active'] = $request->boolean('is_active');
+                $data['usage_status'] = $data['is_active'] ? 'IN_USE' : 'NOT_IN_USE';
+            }
+
+            if ($request->has('quantity_per_batch')) {
+                $data['quantity_per_batch'] = $request->quantity_per_batch;
+            }
         }
 
         if ($request->filled('category_id')) {
@@ -194,12 +216,19 @@ class ProductController extends Controller
                 $product->ingredients()->sync($syncData);
             }
 
-            // Auto-create stock with threshold 15
-            $product->stock()->create([
-                'quantity' => 0,
-                'min_threshold' => 40,
-                'unit' => $request->unit ?? 'piece',
-            ]);
+            // Auto-create stock only for non-plat products
+            if ($request->type !== 'plat') {
+                $initialQuantity = 0;
+                if ($request->type === 'food' && $request->has('quantity_per_batch')) {
+                    $initialQuantity = $request->quantity_per_batch;
+                }
+
+                $product->stock()->create([
+                    'quantity' => $initialQuantity,
+                    'min_threshold' => $request->has('min_threshold') ? $request->min_threshold : 40,
+                    'unit' => $request->unit ?? 'piece',
+                ]);
+            }
 
             return $product;
         });
@@ -221,6 +250,16 @@ class ProductController extends Controller
     {
         $user = auth()->user();
         $role = $user->role?->name;
+
+        // Prevent CHEF_MAGASIN from modifying products created by RESPONSABLE_ACHAT
+        if ($role === 'CHEF_MAGASIN') {
+            $creatorRole = $product->creator?->role?->name;
+            if ($creatorRole === 'RESPONSABLE_ACHAT') {
+                return response()->json([
+                    'message' => 'Action non autorisée. Vous ne pouvez pas modifier un produit créé par le Responsable Achat.'
+                ], 403);
+            }
+        }
 
         // Chef Magasin: can only update usage_status or image for approved/rejected products
         if ($role === 'CHEF_MAGASIN' && $product->approval_status !== 'pending') {
@@ -289,7 +328,7 @@ class ProductController extends Controller
             ]);
 
             $data = $request->only(['name', 'description']);
-            if ($request->has('quantity_per_batch')) {
+            if ($request->has('quantity_per_batch') && $product->type !== 'plat') {
                 $data['quantity_per_batch'] = $request->quantity_per_batch;
             }
 
@@ -395,6 +434,15 @@ class ProductController extends Controller
         $productName = $product->name;
         $user = auth()->user();
         $role = $user->role?->name;
+
+        if ($role === 'CHEF_MAGASIN') {
+            $creatorRole = $product->creator?->role?->name;
+            if ($creatorRole === 'RESPONSABLE_ACHAT') {
+                return response()->json([
+                    'message' => 'Action non autorisée. Vous ne pouvez pas supprimer un produit créé par le Responsable Achat.'
+                ], 403);
+            }
+        }
 
         $product->delete();
 
