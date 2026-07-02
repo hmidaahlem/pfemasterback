@@ -31,7 +31,10 @@ class StockForecastController extends Controller
                 ->where('created_at', '>=', $thirtyDaysAgo)
                 ->sum('quantity');
 
-            $dailyAvg = round($totalWithdrawn / 30, 2);
+            $daysDiff = Carbon::parse($product->created_at)->diffInDays(Carbon::now());
+            $divisor = $daysDiff > 0 ? min(30, $daysDiff) : 1;
+
+            $dailyAvg = round($totalWithdrawn / $divisor, 2);
             $daysLeft = null;
             $status = 'STABLE';
 
@@ -79,7 +82,10 @@ class StockForecastController extends Controller
                 ->where('created_at', '>=', $thirtyDaysAgo)
                 ->sum('quantity');
 
-            $dailyAvg = $totalWithdrawn / 30;
+            $daysDiff = Carbon::parse($product->created_at)->diffInDays(Carbon::now());
+            $divisor = $daysDiff > 0 ? min(30, $daysDiff) : 1;
+
+            $dailyAvg = $totalWithdrawn / $divisor;
 
             // Get today's out movements
             $todayWithdrawn = StockMovement::whereHas('stock', function ($q) use ($product) {
@@ -122,7 +128,10 @@ class StockForecastController extends Controller
                 ->where('created_at', '>=', $thirtyDaysAgo)
                 ->sum('quantity');
 
-            $dailyAvg = $totalWithdrawn / 30;
+            $daysDiff = Carbon::parse($product->created_at)->diffInDays(Carbon::now());
+            $divisor = $daysDiff > 0 ? min(30, $daysDiff) : 1;
+
+            $dailyAvg = $totalWithdrawn / $divisor;
 
             if ($dailyAvg > 0) {
                 $daysLeft = $currentStock / $dailyAvg;

@@ -39,7 +39,7 @@ class Stock extends Model
             // Find all FOOD and PLAT products that use this product as an ingredient
             $foodProducts = Product::whereIn('type', ['food', 'plat'])
                 ->whereHas('ingredients', function ($query) use ($stock) {
-                    $query->where('products.id', $stock->product_id);
+                    $query->where('product_recipe.ingredient_id', $stock->product_id);
                 })->get();
 
             foreach ($foodProducts as $food) {
@@ -57,12 +57,20 @@ class Stock extends Model
                     }
                 }
 
-                $newStatus = $allAvailable ? 'IN_USE' : 'OUT_OF_STOCK';
-                if ($food->usage_status !== $newStatus) {
-                    $food->updateQuietly([
-                        'usage_status' => $newStatus,
-                        'is_active' => $allAvailable
-                    ]); // use updateQuietly to avoid infinite loops if it triggers its own observers
+                if ($allAvailable) {
+                    if ($food->usage_status === 'OUT_OF_STOCK') {
+                        $food->updateQuietly([
+                            'usage_status' => 'IN_USE',
+                            'is_active' => true
+                        ]);
+                    }
+                } else {
+                    if ($food->usage_status !== 'OUT_OF_STOCK') {
+                        $food->updateQuietly([
+                            'usage_status' => 'OUT_OF_STOCK',
+                            'is_active' => false
+                        ]);
+                    }
                 }
             }
         });

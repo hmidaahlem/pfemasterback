@@ -136,19 +136,22 @@ class ProductController extends Controller
 
         $data = $request->only(['name', 'description', 'type']);
         $data['created_by'] = $user->id;
-        // CHEF_CUISINE manages their own recipes: auto-approve without RESPONSABLE_ACHAT validation
-        $data['approval_status'] = ($role === 'CHEF_CUISINE') ? 'approved' : 'pending';
+        // CHEF_CUISINE, RESPONSABLE_ACHAT, and SUPER_ADMIN products are auto-approved during creation
+        $data['approval_status'] = in_array($role, ['CHEF_CUISINE', 'RESPONSABLE_ACHAT', 'SUPER_ADMIN']) ? 'approved' : 'pending';
 
         if ($request->type === 'plat') {
             $data['quantity_per_batch'] = null;
             // No usage_status needed for plat
         } else {
-            if ($request->has('usage_status')) {
-                $data['usage_status'] = $request->usage_status;
-                $data['is_active'] = $request->usage_status === 'IN_USE';
-            } elseif ($request->has('is_active')) {
+            if ($request->has('is_active')) {
                 $data['is_active'] = $request->boolean('is_active');
                 $data['usage_status'] = $data['is_active'] ? 'IN_USE' : 'NOT_IN_USE';
+                if ($request->has('usage_status') && $request->usage_status === 'OUT_OF_STOCK' && !$data['is_active']) {
+                    $data['usage_status'] = 'OUT_OF_STOCK';
+                }
+            } elseif ($request->has('usage_status')) {
+                $data['usage_status'] = $request->usage_status;
+                $data['is_active'] = $request->usage_status === 'IN_USE';
             }
 
             if ($request->has('quantity_per_batch')) {
@@ -248,6 +251,7 @@ class ProductController extends Controller
 
     public function update(Request $request, Product $product): JsonResponse
     {
+        \Illuminate\Support\Facades\Log::info('Update Product Payload: ', $request->all());
         $user = auth()->user();
         $role = $user->role?->name;
 
@@ -314,7 +318,7 @@ class ProductController extends Controller
 
             $data = $request->only(['name', 'description', 'category_id']);
         } elseif ($role === 'CHEF_CUISINE') {
-            // Chef Cuisine: can update name, description, recipe, quantity_per_batch
+            // Chef Cuisine: can update name, description, recipe, quantity_per_batch, is_active
             $request->validate([
                 'name' => 'sometimes|string|max:255',
                 'description' => 'sometimes|nullable|string',
@@ -325,12 +329,26 @@ class ProductController extends Controller
                 'ingredients.*.quantity' => 'sometimes|numeric|min:0.01',
                 'ingredients.*.unit' => 'sometimes|string',
                 'unit' => 'sometimes|string|in:piece,kg,g,liter,ml',
+                'is_active' => 'sometimes|boolean',
+                'usage_status' => 'sometimes|in:IN_USE,NOT_IN_USE,OUT_OF_STOCK',
             ]);
 
             $data = $request->only(['name', 'description']);
             if ($request->has('quantity_per_batch') && $product->type !== 'plat') {
                 $data['quantity_per_batch'] = $request->quantity_per_batch;
             }
+
+            if ($request->has('is_active')) {
+                $data['is_active'] = $request->boolean('is_active');
+                $data['usage_status'] = $data['is_active'] ? 'IN_USE' : 'NOT_IN_USE';
+                if ($request->has('usage_status') && $request->usage_status === 'OUT_OF_STOCK' && !$data['is_active']) {
+                    $data['usage_status'] = 'OUT_OF_STOCK';
+                }
+            } elseif ($request->has('usage_status')) {
+                $data['usage_status'] = $request->usage_status;
+                $data['is_active'] = $request->usage_status === 'IN_USE';
+            }
+
 
             if ($request->has('ingredients')) {
                 $approvalIssues = [];
@@ -362,6 +380,7 @@ class ProductController extends Controller
                 'price' => 'sometimes|numeric|min:0',
                 'image' => 'sometimes|nullable|image|max:2048',
                 'is_active' => 'sometimes|boolean',
+                'usage_status' => 'sometimes|in:IN_USE,NOT_IN_USE,OUT_OF_STOCK',
                 'allergens' => 'sometimes|nullable|array',
                 'expiration_date' => 'sometimes|nullable|date',
                 'unit' => 'sometimes|string|in:piece,kg,g,liter,ml',
@@ -371,6 +390,17 @@ class ProductController extends Controller
                 'name', 'description', 'type', 'category_id', 'price',
                 'is_active', 'allergens', 'expiration_date',
             ]);
+
+            if ($request->has('is_active')) {
+                $data['is_active'] = $request->boolean('is_active');
+                $data['usage_status'] = $data['is_active'] ? 'IN_USE' : 'NOT_IN_USE';
+                if ($request->has('usage_status') && $request->usage_status === 'OUT_OF_STOCK' && !$data['is_active']) {
+                    $data['usage_status'] = 'OUT_OF_STOCK';
+                }
+            } elseif ($request->has('usage_status')) {
+                $data['usage_status'] = $request->usage_status;
+                $data['is_active'] = $request->usage_status === 'IN_USE';
+            }
         }
 
         if ($request->hasFile('image')) {
@@ -380,6 +410,7 @@ class ProductController extends Controller
             $data['image'] = $request->file('image')->store('products', 'public');
         }
 
+        \Illuminate\Support\Facades\Log::info('Data array before update:', $data);
         $product->update($data);
 
         if ($request->has('unit') && $product->stock) {

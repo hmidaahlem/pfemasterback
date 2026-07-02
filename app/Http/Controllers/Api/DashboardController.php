@@ -32,6 +32,12 @@ class DashboardController extends Controller
         if ($role === 'RESPONSABLE_FB') {
             $lowStockQuery->whereHas('product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
             $expiredQuery->whereIn('type', ['commercial', 'food']);
+        } elseif ($role === 'CHEF_MAGASIN') {
+            $lowStockQuery->whereHas('product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
+            $expiredQuery->whereIn('type', ['commercial', 'matiere_premiere']);
+        } elseif ($role === 'CHEF_CUISINE') {
+            $lowStockQuery->whereHas('product', fn($q) => $q->where('type', 'matiere_premiere'));
+            $expiredQuery->whereIn('type', ['matiere_premiere']);
         }
 
         $lowStockCount = $lowStockQuery->count();
@@ -50,25 +56,36 @@ class DashboardController extends Controller
             ->where('status', 'EN_ATTENTE')->count();
 
         // ─── GASPILLAGE (WASTE) KPIs ───
-        $wasteMovements = StockMovement::where('type', 'out')
+        $wasteMovementsQuery = StockMovement::where('type', 'out')
             ->where(function ($q) {
                 $q->where('reason', 'LIKE', '%expir%')
                     ->orWhere('reason', 'LIKE', '%waste%')
                     ->orWhere('reason', 'LIKE', '%gaspill%')
                     ->orWhere('reason', 'LIKE', '%perte%');
             })
-            ->whereBetween('created_at', [$dateFrom, $dateTo])
-            ->sum('quantity');
+            ->whereBetween('created_at', [$dateFrom, $dateTo]);
 
-        $expiredBatches = StockMovement::where('type', 'in')
+        $expiredBatchesQuery = StockMovement::where('type', 'in')
             ->whereNotNull('expiration_date')
             ->where('expiration_date', '<', now())
-            ->where('quantity', '>', 0)
-            ->sum('quantity');
+            ->where('quantity', '>', 0);
 
+        if ($role === 'RESPONSABLE_FB') {
+            $wasteMovementsQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
+            $expiredBatchesQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
+        } elseif ($role === 'CHEF_MAGASIN') {
+            $wasteMovementsQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
+            $expiredBatchesQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
+        } elseif ($role === 'CHEF_CUISINE') {
+            $wasteMovementsQuery->whereHas('stock.product', fn($q) => $q->where('type', 'matiere_premiere'));
+            $expiredBatchesQuery->whereHas('stock.product', fn($q) => $q->where('type', 'matiere_premiere'));
+        }
+
+        $wasteMovements = $wasteMovementsQuery->sum('quantity');
+        $expiredBatches = $expiredBatchesQuery->sum('quantity');
         $totalWaste = $wasteMovements + $expiredBatches;
 
-        $wasteTrend = StockMovement::select(
+        $wasteTrendQuery = StockMovement::select(
             DB::raw('DATE(created_at) as date'),
             DB::raw('SUM(quantity) as total')
         )
@@ -79,8 +96,17 @@ class DashboardController extends Controller
                     ->orWhere('reason', 'LIKE', '%perte%')
                     ->orWhere('reason', 'LIKE', '%gaspill%');
             })
-            ->whereBetween('created_at', [$dateFrom, $dateTo])
-            ->groupBy('date')
+            ->whereBetween('created_at', [$dateFrom, $dateTo]);
+
+        if ($role === 'RESPONSABLE_FB') {
+            $wasteTrendQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'food']));
+        } elseif ($role === 'CHEF_MAGASIN') {
+            $wasteTrendQuery->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']));
+        } elseif ($role === 'CHEF_CUISINE') {
+            $wasteTrendQuery->whereHas('stock.product', fn($q) => $q->where('type', 'matiere_premiere'));
+        }
+
+        $wasteTrend = $wasteTrendQuery->groupBy('date')
             ->orderBy('date')
             ->get();
 
@@ -88,10 +114,18 @@ class DashboardController extends Controller
         $roleData = [];
 
         if ($role === 'CHEF_MAGASIN') {
-            $roleData['recent_movements'] = StockMovement::with('stock.product')->latest()->limit(5)->get();
-            $roleData['critical_products_list'] = Stock::with('product.category')->whereColumn('quantity', '<=', 'min_threshold')->limit(5)->get();
-            $roleData['expired_batches_list'] = StockMovement::with('stock.product')->where('type', 'in')->whereNotNull('expiration_date')->where('expiration_date', '<', now())->where('quantity', '>', 0)->limit(5)->get();
-            $roleData['total_stock_qty'] = Stock::sum('quantity');
+            $roleData['recent_movements'] = StockMovement::with('stock.product')
+                ->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']))
+                ->latest()->limit(5)->get();
+            $roleData['critical_products_list'] = Stock::with('product.category')
+                ->whereHas('product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']))
+                ->whereColumn('quantity', '<=', 'min_threshold')->limit(5)->get();
+            $roleData['expired_batches_list'] = StockMovement::with('stock.product')
+                ->where('type', 'in')->whereNotNull('expiration_date')
+                ->where('expiration_date', '<', now())->where('quantity', '>', 0)
+                ->whereHas('stock.product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']))
+                ->limit(5)->get();
+            $roleData['total_stock_qty'] = Stock::whereHas('product', fn($q) => $q->whereIn('type', ['commercial', 'matiere_premiere']))->sum('quantity');
         } elseif ($role === 'CHEF_CUISINE') {
             $totalIngredients = Product::where('type', 'matiere_premiere')
                 ->where('approval_status', 'approved')
@@ -196,7 +230,15 @@ class DashboardController extends Controller
         }
 
         // Fetch recent orders with items and products for the mobile dashboard
-        $recentOrders = InternalOrder::with('items.product')->latest()->limit(5)->get();
+        $recentOrdersQuery = InternalOrder::with('items.product');
+        if ($role === 'CHEF_MAGASIN') {
+            $recentOrdersQuery->where('type', 'commercial');
+        } elseif ($role === 'CHEF_CUISINE') {
+            $recentOrdersQuery->where('type', 'food');
+        } elseif ($role === 'RESPONSABLE_FB') {
+            $recentOrdersQuery->whereIn('type', ['commercial', 'food']);
+        }
+        $recentOrders = $recentOrdersQuery->latest()->limit(5)->get();
 
         return response()->json([
             'low_stock_count' => $lowStockCount,
