@@ -397,4 +397,34 @@ class CorrectionsTest extends TestCase
             'source' => 'hygiene_guardrail_engine'
         ]);
     }
+
+    public function test_chatbot_blocks_forbidden_topics_for_caissier()
+    {
+        $caissier = User::factory()->create(['role_id' => Role::where('name', 'CAISSIER')->first()->id]);
+
+        $response = $this->actingAsJwt($caissier)->postJson("/api/chatbot/ask", [
+            'message' => 'Quel est le planning de demain ou le stock disponible ?'
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonFragment([
+            'source' => 'cashier_restriction_engine'
+        ]);
+    }
+
+    public function test_chatbot_local_fallback_blocks_unauthorized_role_topics()
+    {
+        $chefCuisine = User::factory()->create(['role_id' => Role::where('name', 'CHEF_CUISINE')->first()->id]);
+
+        // Requesting planning information under local fallback for CHEF_CUISINE (unauthorized)
+        $response = $this->actingAsJwt($chefCuisine)->postJson("/api/chatbot/ask", [
+            'message' => 'Quel est le planning de demain ?'
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonFragment([
+            'source' => 'local_nlp_engine'
+        ]);
+        $this->assertStringContainsString('Acces non autorise', $response->json('response'));
+    }
 }
