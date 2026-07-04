@@ -308,4 +308,35 @@ class CorrectionsTest extends TestCase
             'message' => 'Insufficient raw materials to fulfill this order.'
         ]);
     }
+
+    public function test_internal_order_status_change_notifies_fb_responsables()
+    {
+        $magasin = User::factory()->create(['role_id' => Role::where('name', 'CHEF_MAGASIN')->first()->id]);
+        $fbRole = Role::where('name', 'RESPONSABLE_FB')->first();
+        $fbUser = User::factory()->create(['role_id' => $fbRole->id]);
+
+        $airport = \App\Models\Airport::create(['name' => 'Airport 6', 'code' => 'AR6']);
+        $pdv = PointDeVente::create(['name' => 'PDV 6', 'airport_id' => $airport->id]);
+
+        $order = InternalOrder::create([
+            'created_by' => $fbUser->id,
+            'assigned_to' => $magasin->id,
+            'pdv_id' => $pdv->id,
+            'type' => 'commercial',
+            'status' => 'EN_ATTENTE',
+        ]);
+
+        // Change status to NON_DISPONIBLE
+        $response = $this->actingAsJwt($magasin)->putJson("/api/internal-orders/{$order->id}/status", [
+            'status' => 'NON_DISPONIBLE'
+        ]);
+
+        $response->assertStatus(200);
+
+        // Verify notification is created for the RESPONSABLE_FB
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $fbUser->id,
+            'title' => 'Statut de commande mis à jour',
+        ]);
+    }
 }
