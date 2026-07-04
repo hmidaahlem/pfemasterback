@@ -28,9 +28,12 @@ class ChatbotController extends Controller
 
         if (!$productId) {
             $cleanMessage = mb_strtolower($message);
+            // Sort products by name length DESC so longer names match first
+            // (e.g., 'soupe lentille' matches before 'soupe')
             $matchingProduct = Product::where('is_active', true)
                 ->where('approval_status', 'approved')
                 ->get()
+                ->sortByDesc(fn($p) => strlen($p->name))
                 ->first(function ($p) use ($cleanMessage) {
                     return str_contains($cleanMessage, mb_strtolower($p->name));
                 });
@@ -860,6 +863,7 @@ class ChatbotController extends Controller
             'nutri', 'diabét', 'diabet', 'coeliaque', 'cœliaque', 'sensibl', 'malad', 'manger', 'sain',
             'lait', 'fromage', 'farine', 'blé', 'sucre', 'sel', 'gras', 'hygien', 'hygièn', 'sant', 'conform',
             'dlc', 'expiration', 'perim', 'périm', 'expire',
+            'produit', 'info', 'dite', 'dire', 'tout', 'contien', 'comport', 'detail', 'détail', 'dis-moi', 'dites',
             'حساسية', 'جلوتين', 'لاكتوز', 'مكونات', 'صحة', 'مرض', 'سكري', 'ضغط', 'حليب', 'بيض', 'قمح', 'مريض', 'أكل', 'تناول',
             'صالح', 'تسمم', 'تاريخ', 'انتهاء', 'أمان', 'سليم', 'عنب', 'مكسرات', 'فول صويا', 'سمك',
         ];
