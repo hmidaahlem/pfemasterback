@@ -26,6 +26,19 @@ class ChatbotController extends Controller
         $productId = $request->input('product_id');
         $message   = $request->input('message');
 
+        if (!$productId) {
+            $cleanMessage = mb_strtolower($message);
+            $matchingProduct = Product::where('is_active', true)
+                ->where('approval_status', 'approved')
+                ->get()
+                ->first(function ($p) use ($cleanMessage) {
+                    return str_contains($cleanMessage, mb_strtolower($p->name));
+                });
+            if ($matchingProduct) {
+                $productId = $matchingProduct->id;
+            }
+        }
+
         /** @var User|null $user */
         $user     = Auth::user();
         $userRole = $user && $user->role ? $user->role->name : 'GUEST';
@@ -60,7 +73,7 @@ class ChatbotController extends Controller
         $hygieneReportsContext = "";
 
         if ($productId) {
-            $product = Product::with(['stock', 'hygieneReports'])->find($productId);
+            $product = Product::with(['stock', 'hygieneReports', 'ingredients'])->find($productId);
 
             if (!$product) {
                 return response()->json(['success' => false, 'message' => 'Produit non trouve.'], 404);
@@ -68,10 +81,6 @@ class ChatbotController extends Controller
 
             // Programmatic Guardrail: If no hygiene reports exist AND there is no substantial ingredients list,
             // check if the question is health-related and return a safe message immediately to prevent hallucinations.
-            $desc = trim($product->description ?? '');
-            $hasHygiene = $product->hygieneReports->isNotEmpty();
-            $hasIngredients = !empty($desc) && strlen($desc) > 15 && !preg_match('/^\d+(\.\d+)?\s*(l|ml|cl|g|kg|can|piece|pcs|gazeuz)$/i', $desc);
-
             $isHealthQuestion = false;
             $healthKeywords = [
                 'allergen', 'allerg', 'gluten', 'lactose', 'arachid', 'diabét', 'diabet',
@@ -92,15 +101,47 @@ class ChatbotController extends Controller
                 }
             }
 
+            // 1. NON-CONFORMITY GUARDRAIL
+            $hasNonConformeReport = $product->hygieneReports->contains('status', 'non_conforme');
+            if ($hasNonConformeReport && ($userRole === 'CAISSIER' || $userRole === 'GUEST' || $isHealthQuestion)) {
+                $lang = $this->detectMessageLanguage($message);
+                $nonConformeWarnings = [
+                    'ar' => "عذراً، هذا المنتج غير مطابق لمعايير السلامة الصحية الرسمية (NON CONFORME). لدواعي السلامة، لا يمكن تقديم أي معلومات أو نصائح صحية لهذا المنتج.",
+                    'fr' => "Désolé, ce produit est marqué non conforme (NON CONFORME) par le responsable Hygiène. Pour des raisons de sécurité alimentaire, aucune information (ingrédients, DLC, allergènes) ne peut être divulguée pour ce produit.",
+                    'en' => "Sorry, this product is marked as non-conforming (NON CONFORME) by the hygiene officer. For food safety reasons, no information (ingredients, expiration date, allergens) can be provided for this product.",
+                    'es' => "Lo sentimos, este producto está marcado como no conforme (NON CONFORME) por el responsable de higiene. Por razones de seguridad alimentaria, no se puede proporcionar ninguna información sobre este producto.",
+                    'it' => "Spiacenti, questo produit est contrassegnato come non conforme (NON CONFORME) dal responsabile dell'igiene. Per motivi di sicurezza alimentare, non è possibile fornire alcuna informazione su questo produit.",
+                    'de' => "Entschuldigung, dieses Produkt wurde vom Hygienebeauftragten als nicht konform (NON CONFORME) eingestuft. Aus Gründen der Lebensmittelsicherheit können keine Informationen zu diesem Produkt bereitgestellt werden."
+                ];
+                $responseMsg = $nonConformeWarnings[$lang] ?? $nonConformeWarnings['en'];
+
+                return response()->json([
+                    'success'  => true,
+                    'response' => $responseMsg,
+                    'source'   => 'hygiene_non_conforme_guardrail'
+                ]);
+            }
+
+            // 2. RECIPE INGREDIENTS LOADING
+            $ingredientsList = "";
+            if ($product->ingredients->isNotEmpty()) {
+                $ingredientsList = $product->ingredients->map(fn($i) => "- " . $i->name . " (" . $i->pivot->quantity . " " . ($i->pivot->unit ?? 'piece') . ")")->implode("\n");
+            } else {
+                $ingredientsList = trim($product->description ?? '');
+            }
+
+            $hasHygiene = $product->hygieneReports->isNotEmpty();
+            $hasIngredients = !empty($ingredientsList) && strlen($ingredientsList) > 5;
+
             if ($userRole === 'CAISSIER' || $userRole === 'GUEST' || $isHealthQuestion) {
                 if (!$hasHygiene && !$hasIngredients) {
                     $lang = $this->detectMessageLanguage($message);
                     $warnings = [
-                        'ar' => "عذراً، لم يتم تسجيل أي تقرير صحي رسمي أو قائمة مكونات مفصلة للمنتج \"" . $product->name . "\" من قبل مسؤول النظافة والسلامة الصحية (RESPONSABLE_HYGIENE). لدواعي السلامة، لا يمكن تقديم أي نصيحة صحية أو معلومات حول توافق الحساسية لهذا المنتج.",
+                        'ar' => "عذراً، لم يتم تسجيل أي تقرير صحي رسمي أو قائمة مكونات مفصلة للمنتج \"" . $product->name . "\" من قبل مسؤول النظافة والسلامة الصحية (RESPONSABLE_HYGIENE). لدواعي السلامة، لا يمكن تقديم أي نصائح صحية أو معلومات حول توافق الحساسية لهذا المنتج.",
                         'fr' => "Désolé, aucun rapport officiel d'hygiène ou liste détaillée d'ingrédients n'a été enregistré pour le produit \"" . $product->name . "\" par le responsable Hygiène (RESPONSABLE_HYGIENE). Par sécurité, aucun conseil de santé ou de compatibilité allergène ne peut être donné pour ce produit.",
                         'en' => "Sorry, no official hygiene report or detailed ingredients list has been recorded for the product \"" . $product->name . "\" by the hygiene officer (RESPONSABLE_HYGIENE). For safety reasons, no health advice or allergen compatibility information can be provided for this product.",
-                        'es' => "Lo sentimos, el responsable de higiene (RESPONSABLE_HYGIENE) no ha registrado ningún informe oficial de higiene ni una lista detallada de ingredientes para el producto \"" . $product->name . "\". Por razones de seguridad, no se pueden proporcionar consejos de salud o información de compatibilidad de alérgenos para este producto.",
-                        'it' => "Spiacenti, non è stato registrato alcun rapporto ufficiale di igiene o elenco dettagliato degli ingredienti per il prodotto \"" . $product->name . "\" da parte del responsabile dell'igiene (RESPONSABLE_HYGIENE). Per motivi di sicurezza, non è possibile fornire consigli sulla salute o informazioni sulla compatibilité con gli allergeni per questo prodotto.",
+                        'es' => "Lo sentimos, el responsable de higiene (RESPONSABLE_HYGIENE) no ha registrado ningún informe oficial de higiene ni una lista detallada de ingredientes para le produit \"" . $product->name . "\". Por razones de seguridad, no se pueden proporcionar consejos de salud o información de compatibilité de alérgenos para este producto.",
+                        'it' => "Spiacenti, non è stato registrato alcun rapporto ufficiale di igiene o elenco dettagliato degli ingredienti per il produit \"" . $product->name . "\" da parte del responsable dell'igiene (RESPONSABLE_HYGIENE). Per motivi di sicurezza, non è possibile fornire consigli sulla salute o informazioni sulla compatibilité con gli allergeni per questo prodotto.",
                         'de' => "Entschuldigung, für das Produkt \"" . $product->name . "\" wurde vom Hygienebeauftragten (RESPONSABLE_HYGIENE) kein offizieller Hygienebericht oder eine detaillierte Zutatenliste erfasst. Aus Sicherheitsgründen können für dieses Produkt keine Gesundheitsratschläge oder Informationen zur Allergenverträglichkeit bereitgestellt werden."
                     ];
                     $responseMsg = $warnings[$lang] ?? $warnings['en'];
@@ -113,12 +154,12 @@ class ChatbotController extends Controller
                 }
             }
 
-            $ingredients   = $product->description ?? 'Aucun ingredient specifie.';
+            $ingredients   = $ingredientsList ?: 'Aucun ingredient specifie.';
             $allergensList = is_array($product->allergens) ? implode(', ', $product->allergens) : ($product->allergens ?? 'Aucun.');
             $productContext = "Voici les details du produit alimentaire actuel :\n" .
                               "Produit: {$product->name}\n" .
                               "Type: {$product->type}\n" .
-                              "Description/Ingredients: {$ingredients}\n" .
+                              "Description/Ingredients: \n{$ingredients}\n" .
                               "Allergenes declares: {$allergensList}\n" .
                               "Prix: {$product->price} TND\n";
 
@@ -642,6 +683,12 @@ class ChatbotController extends Controller
             return "Je suis desole, je ne reponds qu'aux questions sur la sante, les allergenes et la composition des produits. Pour toute question administrative ou logistique, utilisez les autres sections de l'application.";
         }
 
+        // 1. Non-conformity check
+        $hasNonConformeReport = $product->hygieneReports->contains('status', 'non_conforme');
+        if ($hasNonConformeReport) {
+            return "Désolé, ce produit est marqué non conforme (NON CONFORME) par le responsable Hygiène. Pour des raisons de sécurité alimentaire, aucune information (ingrédients, expiration, allergènes) ne peut être divulguée pour ce produit.";
+        }
+
         // No hygiene reports → no data to answer from
         if (!$product->hygieneReports || $product->hygieneReports->isEmpty()) {
             return "Aucune declaration sanitaire n'a encore ete enregistree par le responsable Hygiene pour le produit \"" . $product->name . "\". Mes reponses sont basees exclusivement sur les rapports officiels du responsable Hygiene. Veuillez contacter le responsable Hygiene pour obtenir ces informations.";
@@ -650,6 +697,22 @@ class ChatbotController extends Controller
         // Build response strictly from hygiene report data
         $parts = [];
         $parts[] = "Informations sanitaires pour \"" . $product->name . "\" (donnees declarees par le responsable Hygiene) :\n";
+
+        // Ingredients Loading
+        $ingredientsList = "";
+        if ($product->ingredients && $product->ingredients->isNotEmpty()) {
+            $ingredientsList = $product->ingredients->map(fn($i) => "- " . $i->name)->implode("\n");
+        } else {
+            $ingredientsList = trim($product->description ?? '');
+        }
+        if (!empty($ingredientsList)) {
+            $parts[] = "Composition/Ingredients :\n" . $ingredientsList . "\n";
+        }
+
+        // Expiration/DLC
+        if ($product->expiration_date) {
+            $parts[] = "Date limite de consommation (DLC) : " . $product->expiration_date . "\n";
+        }
 
         $allergensList = is_array($product->allergens) ? implode(', ', $product->allergens) : ($product->allergens ?? 'Aucun.');
         $parts[] = "Allergenes declares : " . $allergensList . "\n";

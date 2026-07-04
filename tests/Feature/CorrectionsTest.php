@@ -28,6 +28,7 @@ class CorrectionsTest extends TestCase
         Role::firstOrCreate(['name' => 'RESPONSABLE_ACHAT', 'display_name' => 'Responsable Achat']);
         Role::firstOrCreate(['name' => 'CHEF_CUISINE', 'display_name' => 'Chef Cuisine']);
         Role::firstOrCreate(['name' => 'CAISSIER', 'display_name' => 'Caissier']);
+        Role::firstOrCreate(['name' => 'RESPONSABLE_HYGIENE', 'display_name' => 'Responsable Hygiène']);
 
         // Create food category
         Category::firstOrCreate(['name' => 'Food Category', 'type' => 'food']);
@@ -337,6 +338,63 @@ class CorrectionsTest extends TestCase
         $this->assertDatabaseHas('notifications', [
             'user_id' => $fbUser->id,
             'title' => 'Statut de commande mis à jour',
+        ]);
+    }
+
+    public function test_chatbot_blocks_non_conforme_product_questions()
+    {
+        $guestUser = User::factory()->create(['role_id' => Role::where('name', 'CAISSIER')->first()->id]);
+        
+        $product = Product::create([
+            'name' => 'Burger Test',
+            'type' => 'food',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+        ]);
+
+        // Create a non_conforme hygiene report
+        $inspector = User::factory()->create(['role_id' => Role::where('name', 'RESPONSABLE_HYGIENE')->first()->id]);
+        $product->hygieneReports()->create([
+            'status' => 'non_conforme',
+            'remarks' => 'Contamination check failed.',
+            'inspected_by' => $inspector->id,
+            'allergens_verified' => true,
+            'expiration_verified' => true,
+        ]);
+
+        $response = $this->actingAsJwt($guestUser)->postJson("/api/chatbot/ask", [
+            'product_id' => $product->id,
+            'message' => 'Contient-il des allergènes ?'
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonFragment([
+            'source' => 'hygiene_non_conforme_guardrail'
+        ]);
+    }
+
+    public function test_chatbot_resolves_product_name_from_message()
+    {
+        $guestUser = User::factory()->create(['role_id' => Role::where('name', 'CAISSIER')->first()->id]);
+        
+        $product = Product::create([
+            'name' => 'Salade Cesar Speciale',
+            'type' => 'food',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+        ]);
+
+        // No product_id passed, but product name is in the message
+        $response = $this->actingAsJwt($guestUser)->postJson("/api/chatbot/ask", [
+            'message' => 'Quels sont les allergènes de Salade Cesar Speciale ?'
+        ]);
+
+        $response->assertStatus(200);
+        // It should match the name and hit the hygiene guardrail (since no reports exist)
+        $response->assertJsonFragment([
+            'source' => 'hygiene_guardrail_engine'
         ]);
     }
 }
