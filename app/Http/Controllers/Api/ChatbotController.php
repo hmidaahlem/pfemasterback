@@ -257,15 +257,13 @@ class ChatbotController extends Controller
                           "L'utilisateur connecte s'appelle {$userName} avec le role: {$userRole}.\n" .
                           $userContext . "\n" .
                           ($productId ? "<context>\n" . $productContext . "\n" . $hygieneReportsContext . "\n" . "</context>\n" : "") .
-                          "Directives strictes de securite :\n" .
-                          "- Tu ne dois repondre a AUCUNE question qui ne concerne pas directement l'application AeroServe. Les questions hors-sujet doivent etre refusees poliment.\n" .
-                          "- RÈGLE ANTI-HALLUCINATION ABSOLUE : Si l'utilisateur demande un rapport d'hygiene, une conformite, un stock, ou des ingredients d'une chose, et que cette information n'est pas EXPLICITEMENT fournie dans le <context> ou par un appel de fonction (tool), tu DOIS repondre : 'Desole, je ne dispose d'aucune donnee officielle ou rapport pour cet element dans le systeme.'\n" .
-                          "- NE DIS JAMAIS qu'un element est 'conforme' ou 'sans danger' si tu n'as pas lu un rapport d'hygiene explicite affirmant cela.\n" .
-                          "- TU NE DOIS JAMAIS inventer de donnees, de profils, d'e-mails, d'informations de stocks, ou de commandes.\n" .
-                          "- Si tu parles de la composition ou des allergenes d'un produit, base-toi STRICTEMENT sur les informations du <context> et ne fais aucune supposition.\n" .
-                          "- Reponds de maniere concise, polie et dans la meme langue que celle de la question.\n" .
-                          "- N'utilise absolument aucun emoji dans tes reponses.\n" .
-                          "- Tu as acces a des outils (tools) pour chercher dans la base de donnees. Utilise-les pour obtenir des donnees reelles au lieu de deviner.";
+                          "RÈGLES ABSOLUES ET NON NÉGOCIABLES:\n" .
+                          "1. ANTI-HALLUCINATION : Tu as L'INTERDICTION ABSOLUE de repondre a une question sur les commandes, stocks, produits, statistiques ou rapports SANS appeler les outils disponibles. Tu dois TOUJOURS appeler l'outil adequat avant de repondre.\n" .
+                          "2. OUTILS OBLIGATOIRES : Pour toute question sur les commandes → appelle 'obtenir_commandes'. Pour les stocks → 'obtenir_stocks'. Pour les statistiques ou KPIs → 'obtenir_statistiques'. Pour un produit specifique → 'chercher_produits' puis 'obtenir_details_produit'. Pour le menu → 'obtenir_menu_semaine'. Pour hygiene → 'obtenir_rapports_hygiene'.\n" .
+                          "3. NE JAMAIS donner de chiffres, comptages, statuts ou details sans les avoir obtenus d'un outil. Toute donnee inventee est une faute grave.\n" .
+                          "4. Reponds de maniere concise, polie et dans la meme langue que celle de la question.\n" .
+                          "5. N'utilise absolument aucun emoji dans tes reponses.\n" .
+                          "6. Ne reponds pas aux questions hors-sujet (politique, blagues, questions personnelles). Refuse poliment.";
         }
 
         $groqKey   = config('services.groq.key');
@@ -279,6 +277,23 @@ class ChatbotController extends Controller
                     ['role' => 'user',   'content' => $message],
                 ];
 
+                // Force tool usage when the query is clearly about real data
+                $dataKeywords = [
+                    'commande', 'order', 'en attente', 'stock', 'quantite', 'quantité',
+                    'produit', 'article', 'menu', 'plat', 'semaine', 'hygiene', 'hygiène',
+                    'rapport', 'statut', 'statistique', 'kpi', 'combien', 'liste',
+                    'طلب', 'طلبات', 'مخزون', 'منتج', 'قائمة', 'كم', 'عدد',
+                ];
+                $messageLowerGroq = mb_strtolower($message);
+                $forceToolUse = false;
+                foreach ($dataKeywords as $kw) {
+                    if (str_contains($messageLowerGroq, $kw)) {
+                        $forceToolUse = true;
+                        break;
+                    }
+                }
+                $toolChoiceValue = $forceToolUse ? 'required' : 'auto';
+
                 $response = Http::withHeaders([
                     'Authorization' => "Bearer {$groqKey}",
                     'Content-Type'  => 'application/json',
@@ -286,7 +301,7 @@ class ChatbotController extends Controller
                     'model'       => 'llama-3.3-70b-versatile',
                     'messages'    => $messages,
                     'tools'       => $tools,
-                    'tool_choice' => 'auto',
+                    'tool_choice' => $toolChoiceValue,
                     'temperature' => 0.2,
                     'max_tokens'  => 800,
                 ]);
